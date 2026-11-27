@@ -425,7 +425,7 @@ class HomeActivity : AppCompatActivity(), ContactPickerFragment.OnContactedPicke
     }
 
     private fun handleIntent(intent: Intent) {
-        Log.d(TAG, "handleIntent: $intent")
+        Log.d(TAG, "handleIntent: action=${intent.action}")
         when (intent.action) {
 
             NotificationService.NOTIF_TRUST_REQUEST_MULTIPLE -> {
@@ -611,7 +611,7 @@ class HomeActivity : AppCompatActivity(), ContactPickerFragment.OnContactedPicke
         }
         if (clip.itemCount == 0) { Log.d(TAG, "F904CLIP: exit - itemCount 0"); return }
         val text = clip.getItemAt(0)?.coerceToText(this)?.toString()?.trim().orEmpty()
-        Log.d(TAG, "F904CLIP: textLen=${text.length} head=${text.take(16)}")
+        Log.d(TAG, "F904CLIP: textLen=${text.length} hasPrefix=${text.startsWith("JAMICARD1:")}")
         if (text.isEmpty() || text.length > 4096) {
             Log.d(TAG, "F904CLIP: exit - empty or too long"); return
         }
@@ -625,7 +625,7 @@ class HomeActivity : AppCompatActivity(), ContactPickerFragment.OnContactedPicke
                 Log.d(TAG, "F904CLIP: exit - decode failed: ${r.reason}"); return
             }
         }
-        Log.d(TAG, "F904CLIP: decoded card.id=${card.id.take(12)} self=${account.accountId.take(12)}")
+        Log.d(TAG, "F904CLIP: decoded card (id redacted), self=${card.id == account.accountId}")
         // F-904 self 守卫：自己的名片不弹窗、不添加
         if (card.id == account.accountId) {
             Log.d(TAG, "F904CLIP: exit - SELF guard"); return

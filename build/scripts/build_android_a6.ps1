@@ -35,4 +35,14 @@ if (Test-Path $verFile) {
 
 # STEP1: compile
 & .\gradlew.bat assembleNoPushDebug -Parchs=arm64-v8a --no-daemon "-PnpmCommand=$nodeDir\npm.cmd" "-PnodeCommand=$nodeDir\node.exe" -x :app:installCollabEditor *> $log
-"EXITCODE=$LASTEXITCODE" | Out-File -Append -Encoding utf8 $log
+$rc = $LASTEXITCODE
+"EXITCODE=$rc" | Out-File -Append -Encoding utf8 $log
+# Only a successful build advances the number; roll back the bump on failure.
+if ($rc -ne 0 -and $n -and (Test-Path $verFile)) {
+    $bak = "$outdir\strings.xml.bak_build$n"
+    if (Test-Path $bak) {
+        Copy-Item -LiteralPath $bak -Destination $verFile -Force
+        "VERSION_ROLLED_BACK (build failed)" | Out-File -Append -Encoding UTF8 $log
+    }
+}
+exit $rc

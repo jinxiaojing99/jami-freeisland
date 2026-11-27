@@ -138,6 +138,9 @@ object NodeCardCodec {
         if (id.isEmpty()) return Result.Error(Reason.NO_ID)
         if (!HEX40.matches(id)) return Result.Error(Reason.BAD_ID)
 
+        val safeTs = if (obj.has("ts") && !obj.isNull("ts")) {
+            try { obj.getLong("ts") } catch (e: Exception) { null }
+        } else null
         return Result.Ok(
             Card(
                 id = id,
@@ -146,7 +149,7 @@ object NodeCardCodec {
                 v6 = optNullable(obj, "v6"),
                 v4 = optNullable(obj, "v4"),
                 ver = optNullable(obj, "ver"),
-                ts = if (obj.has("ts")) obj.getLong("ts") else null,
+                ts = safeTs,
                 fp = fpGiven
             )
         )
@@ -160,13 +163,18 @@ object NodeCardCodec {
         val out = mutableListOf<String>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
-            // 文件里的每张卡是对象，重编码为标准文本串再走统一校验
+            // 先校验文件自带指纹，不一致的卡片直接跳过（fp 必须来自文件本身）
+            val givenFp = o.optString("fp", "")
+            if (givenFp.isEmpty()) continue
             val m = TreeMap<String, Any>()
             val keys = o.keys()
             while (keys.hasNext()) {
                 val k = keys.next()
                 if (k != "fp") m[k] = o.get(k)
             }
+            val canon = canonical(m)
+            if (!constantTimeEquals(givenFp, fingerprint(canon)) &&
+                !constantTimeEquals(givenFp, fingerprint(canonicalStd(m)))) continue
             out.add(encode(Card(
                 id = o.optString("id", ""),
                 n = optNullable(o, "n"),
@@ -174,7 +182,9 @@ object NodeCardCodec {
                 v6 = optNullable(o, "v6"),
                 v4 = optNullable(o, "v4"),
                 ver = optNullable(o, "ver"),
-                ts = if (o.has("ts")) o.getLong("ts") else null
+                ts = if (o.has("ts") && !o.isNull("ts")) {
+                    try { o.getLong("ts") } catch (e: Exception) { null }
+                } else null
             )))
         }
         return out
@@ -293,7 +303,9 @@ object NodeCardCodec {
     }
 
     private fun optNullable(obj: JSONObject, key: String): String? =
-        if (obj.has(key) && !obj.isNull(key)) obj.getString(key) else null
+        if (obj.has(key) && !obj.isNull(key)) {
+            try { obj.getString(key) } catch (e: Exception) { null }
+        } else null
 
     private fun constantTimeEquals(a: String, b: String): Boolean {
         if (a.length != b.length) return false

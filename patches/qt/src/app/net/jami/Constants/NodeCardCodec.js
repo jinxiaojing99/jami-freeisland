@@ -210,6 +210,13 @@ function parseFile(jsonText) {
     for (var i = 0; i < root.cards.length; i++) {
         var o = root.cards[i];
         if (!o || !o.id) continue;
+        // 先校验文件自带指纹，不一致的卡片直接跳过（fp 必须来自文件本身）
+        var givenFp = o.fp || "";
+        if (!givenFp) continue;
+        var without = {};
+        for (var k in o) { if (k !== "fp" && o.hasOwnProperty(k)) without[k] = o[k]; }
+        if (fingerprint(canonical(without)) !== givenFp &&
+            fingerprint(canonicalAndroid(without)) !== givenFp) continue;
         out.push(encode({
             id: o.id, n: o.n || null, d: o.d || null, v6: o.v6 || null,
             v4: o.v4 || null, ver: o.ver || null, ts: o.ts || null
