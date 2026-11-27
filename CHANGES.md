@@ -36,7 +36,7 @@
 | `app/src/main/java/cx/ring/account/JamiAccountSummaryFragment.kt` | 修改 | 名片入口、self 跳过 |
 | `app/src/main/java/cx/ring/about/AboutFragment.kt` | 修改 | About 页 Freeisland 版本标记 |
 | `app/src/main/res/layout/frag_acc_summary.xml` | 修改 | 名片入口布局 |
-| `app/src/main/res/values/strings.xml` | 修改 | nodeCard* 文案 + `freeisland_version`（A6） |
+| `app/src/main/res/values/strings.xml` | 修改 | nodeCard* 文案 + `freeisland_version`（V0.0.2.<构建序号>） |
 | `app/src/main/res/values-zh-rCN/strings.xml` | 修改 | 中文文案 |
 | `libjamiclient/src/main/kotlin/net/jami/services/AccountService.kt` | 修改 | 新增 `addContactFromCard`（确定性选边） |
 
@@ -48,5 +48,5 @@
 | `patches/dhtnet-mingw-fix.patch` | dhtnet Windows 构建修复 |
 | `patches/libgit2-mingw-regex.patch` | libgit2 Windows 构建修复 |
 | `patches/SetupAPI.h` / `poll.h` | Windows 编译头文件替补 |
-| `scripts/` | 构建脚本（Qt 构建号 6 / Android A6） |
+| `scripts/` | 构建脚本（V0.0.2，构建序号按端自增） |
 | `tools/parse_dhtstate.py` | DHT 节点缓存解析工具 |

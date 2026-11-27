@@ -47,7 +47,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
          i18n: brand/version are fixed identifiers (translatable=false); the
          attribution line is user-facing and MUST be translatable (no flag). -->
     <string name="freeisland_brand" translatable="false">Jami:Freeisland</string>
-    <string name="freeisland_version" translatable="false">Freeisland V0.01.A6</string>
+    <string name="freeisland_version" translatable="false">Freeisland V0.0.2.1</string>
     <string name="freeisland_copyright">Freeisland by popeye using AI</string>
     <string name="conversation_creation_error">Unable to create the conversation</string>
     <string name="credits">Credits</string>

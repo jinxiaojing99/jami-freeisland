@@ -140,7 +140,7 @@ BaseModalDialog {
                                         contentStr += "\n" + JamiStrings.version + ": " + (isBeta ? "(Beta) " : "") + versionStr;
                                     }
                                     // Freeisland branding: append on a new line after Jami version.
-                                    contentStr += "\nFreeisland V0.01." + UtilsAdapter.getFreeislandBuildNumber();
+                                    contentStr += "\nFreeisland V0.0.2." + UtilsAdapter.getFreeislandBuildNumber();
                                     return contentStr;
                                 }
 
