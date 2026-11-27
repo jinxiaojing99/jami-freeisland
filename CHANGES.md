@@ -45,6 +45,7 @@
 | 文件 | 说明 |
 |---|---|
 | `patches/daemon-mingw-*.patch`（4 个） | daemon Windows MinGW/MSVC 构建修复 |
+| `patches/daemon-freeisland-features.patch` | V0.0.2 daemon P6/P3/P5 功能补丁（9 文件 / 26 hunk，基线 P2 快照，诊断日志已剔除） |
 | `patches/dhtnet-mingw-fix.patch` | dhtnet Windows 构建修复 |
 | `patches/libgit2-mingw-regex.patch` | libgit2 Windows 构建修复 |
 | `patches/SetupAPI.h` / `poll.h` | Windows 编译头文件替补 |

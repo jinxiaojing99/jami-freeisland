@@ -18,7 +18,7 @@
 - **当前版本**：Freeisland V0.0.2（2026-11-27，IPv6 私有 DHT 双向消息打通版）
 - **PC 客户端**：About 页显示 `Freeisland V0.0.2.<构建序号>`（构建序号由 cmake 每次 configure 自动 +1）
 - **Android 客户端**：About 页显示 `Freeisland V0.0.2.<构建序号>`（构建序号起始 1，每次成功编译 +1）
-- **daemon**：16.0.0 + P6 IPv6 私有 DHT 改动（源码不在本仓库，改动说明见 `docs/V0.0.2_版本功能说明.md`）；另有源码树外的 MinGW 构建补丁
+- **daemon**：16.0.0 + P6 IPv6 私有 DHT 改动，作为功能补丁存于 `build/patches/daemon-freeisland-features.patch`（基线 P2 快照 2026-11-23，诊断日志已剔除）；另有 MinGW 构建补丁
 - 历史版本标记（`V0.01.x` / `A1~A6`）保留在 `docs/` 与 `CHANGES.md` 中作为历史记录，不再沿用
 
 ## 核心改动

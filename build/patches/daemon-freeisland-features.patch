@@ -1,0 +1,860 @@
+--- a/src/jamidht/jamiaccount.cpp
++++ b/src/jamidht/jamiaccount.cpp
+@@ -21,6 +21,10 @@
+ 
+ #include "jamiaccount.h"
+ #include "presence_manager.h"
++
++#include <cstdlib>
++#include <fstream>
++#include <filesystem>
+ 
+ #include "logger.h"
+ 
+@@ -104,7 +108,6 @@
+ #include <charconv>
+ #include <cinttypes>
+ #include <cstdarg>
+-#include <fstream>
+ #include <initializer_list>
+ #include <memory>
+ #include <regex>
+@@ -1809,8 +1812,23 @@
+ {
+     std::vector<std::string> bootstrap;
+     std::string_view stream(config().hostname), node_addr;
+-    while (jami::getline(stream, node_addr, ';'))
+-        bootstrap.emplace_back(node_addr);
++    const bool privateOnly = config().privateDhtOnly;
++    while (jami::getline(stream, node_addr, ';')) {
++        std::string node(node_addr);
++        // P2 (F-905): a private 2-node DHT must never reach the public
++        // bootstrap.jami.net, even if the config still carries the default.
++        if (privateOnly
++            && (node == DHT_DEFAULT_BOOTSTRAP
++                || node.find("bootstrap.jami.net") != std::string::npos)) {
++            JAMI_LOG("[Account {}] private DHT: ignoring default bootstrap {}",
++                     getAccountID(), node);
++            continue;
++        }
++        bootstrap.emplace_back(std::move(node));
++    }
++    if (privateOnly)
++        JAMI_LOG("[Account {}] private DHT enabled: {} explicit bootstrap node(s)",
++                 getAccountID(), bootstrap.size());
+     for (const auto& b : bootstrap)
+         JAMI_LOG("[Account {}] Bootstrap node: {}", getAccountID(), b);
+     return bootstrap;
+@@ -1992,9 +2010,29 @@
+         dht::DhtRunner::Context context = initDhtContext();
+ 
+         accountManager_->setDht(dht_);
+-        dht_->run(conf.dhtPort, config, std::move(context));
++        // P6: use the run(config) overload so our explicit dual-stack
++        // bind4/bind6 are honored (run(port,...) would overwrite them).
++        // Only for private-DHT accounts: other accounts share the same
++        // default port and would fight over the IPv6 binding.
++        static const bool p6Enabled = [] {
++            const char* e = std::getenv("JAMI_P6_DHT_IPV6");
++#ifdef __ANDROID__
++            return !e || std::string(e) != "0";
++#else
++            return e && std::string(e) == "1";
++#endif
++        }();
++        if (p6Enabled && conf.privateDhtOnly)
++            dht_->run(config, std::move(context));
++        else
++            dht_->run(conf.dhtPort, config, std::move(context));
+ 
+         dhtBoundPort_ = dht_->getBoundPort();
++
++        // P6 (mobile IPv6): keep the private-DHT bootstrap session warm so a
++        // moving peer (changing IPv6 GUA) can be re-learned from packet source.
++        if (p6Enabled && conf.privateDhtOnly)
++            scheduleDhtKeepalive_();
+ 
+         // Now that the DHT is running and we know the actual bound port,
+         // request a UPnP mapping for it. A bound port of 0 means the DHT has no
+@@ -2127,6 +2165,56 @@
+     if (conf.proxyEnabled)
+         config.proxy_server = proxyServerCached_;
+ 
++    // P6 (IPv6 DHT): OpenDHT's run(port, config) overload overwrites
++    // config.bind4/bind6 with AF_INET/AF_INET6 wildcard on `port`, so an
++    // explicit bind6 here would be discarded.  We therefore use the
++    // run(config) overload in that case and set both bind addresses here.
++    static const bool bindIPv6 = [] {
++#ifdef __ANDROID__
++        // Android app env cannot be set externally; mobile-data peers need
++        // IPv6 DHT to escape IPv4 CGNAT, so enable by default there.
++        const char* e = std::getenv("JAMI_P6_DHT_IPV6");
++        return !e || std::string(e) != "0";
++#else
++        const char* e = std::getenv("JAMI_P6_DHT_IPV6");
++        return e && std::string(e) == "1";
++#endif
++    }();
++    if (bindIPv6 && conf.privateDhtOnly) {
++        const auto actualPort = conf.dhtPort ? conf.dhtPort : dht::net::DHT_DEFAULT_PORT;
++        const auto portStr = std::to_string(actualPort);
++        auto v4 = dht::SockAddr::resolve("0.0.0.0", portStr);
++        // P6 (multi-homed IPv6): a wildcard bind ("::") makes the kernel pick
++        // the reply source address by routing. On a host with several global
++        // IPv6 prefixes this can differ from the address the peer sent to,
++        // breaking the UDP five-tuple and causing the peer's NAT/firewall to
++        // drop our reply (verified 2026-11-26: phone sent to PC's 240e:... GUA
++        // but reply left via a 2409:... address -> DHT never connected). Bind
++        // to a specific GUA when requested so replies use the same source.
++        const char* bindIp6Env = std::getenv("JAMI_P6_BIND_IP6");
++        const std::string bindIp6 = (bindIp6Env && *bindIp6Env) ? bindIp6Env : "::";
++        auto v6 = dht::SockAddr::resolve(bindIp6, portStr);
++        if (not v4.empty())
++            config.bind4 = v4.front();
++        if (not v6.empty()) {
++            config.bind6 = v6.front();
++            JAMI_LOG("[Account {}] P6: DHT dual-stack bind on port {} IPv6={}",
++                     getAccountID(), actualPort, bindIp6);
++        } else {
++            JAMI_WARNING("[Account {}] P6: cannot resolve IPv6 {} for DHT bind",
++                         getAccountID(), bindIp6);
++        }
++    }
++
++    // P2 (F-905): a private 2-node DHT must not fall back to the public
++    // dhtproxy.jami.net proxy. P0 proved that proxy contaminates the
++    // isolated network and makes the verification meaningless.
++    if (conf.privateDhtOnly) {
++        if (not config.proxy_server.empty())
++            JAMI_LOG("[Account {}] private DHT: proxy disabled", getAccountID());
++        config.proxy_server.clear();
++    }
++
+     if (not config.proxy_server.empty()) {
+         JAMI_LOG("[Account {}] Using proxy server {}", getAccountID(), config.proxy_server);
+         if (not config.push_token.empty()) {
+@@ -2165,6 +2253,11 @@
+ 
+     context.statusChangedCallback = [this](dht::NodeStatus s4, dht::NodeStatus s6) {
+         JAMI_LOG("[Account {}] DHT status: IPv4 {}; IPv6 {}", getAccountID(), dhtStatusStr(s4), dhtStatusStr(s6));
++        // P6: do NOT call p6RefreshBootstrap_() from this callback. It runs on
++        // the DHT's own thread while internal locks are held; calling
++        // exportNodes()/clearBootstrap()/bootstrap() here re-enters DhtRunner
++        // and crashed the daemon (0xC0000409). Network-change driven refresh
++        // happens in networkInterfaceChanged() on the main thread instead.
+         RegistrationState state;
+         auto newStatus = std::max(s4, s6);
+         switch (newStatus) {
+@@ -2188,7 +2281,14 @@
+     context.identityAnnouncedCb = [this](bool ok) {
+         if (!ok) {
+             JAMI_ERROR("[Account {}] Identity announcement failed", getAccountID());
+-            return;
++            // P6 private-DHT: in a 2-node network behind mobile NAT the
++            // identity announce verification intermittently fails even though
++            // DHT put is reachable (peer deviceFound still fires). Do not let
++            // this abort startSync() or presence/device announce + listen never
++            // run and messaging stays pending forever.
++            if (not config().privateDhtOnly)
++                return;
++            JAMI_WARNING("[Account {}] P6: proceeding with startSync despite announce failure", getAccountID());
+         }
+         JAMI_WARNING("[Account {}] Identity announcement succeeded", getAccountID());
+         accountManager_
+@@ -2896,6 +2996,11 @@
+     }
+ 
+     JAMI_WARNING("[Account {}] Unregistering account {}", getAccountID(), fmt::ptr(this));
++    // P6: stop the DHT keepalive timer before shutting DHT down.
++    if (dhtKeepaliveTimer_) {
++        dhtKeepaliveTimer_->cancel();
++        dhtKeepaliveTimer_.reset();
++    }
+     dht_->shutdown(
+         [&] {
+             JAMI_WARNING("[Account {}] DHT shutdown complete", getAccountID());
+@@ -2973,6 +3078,108 @@
+     accountManager_->reloadContacts();
+ }
+ 
++// P6 (mobile IPv6): periodically nudge OpenDHT's bootstrap state.
++// 30s default (2026-11-26): a 5s interval reset every bucket node's time to
++// min (dht.cpp buckets.connectivityChanged), causing Connected<->Connecting
++// flapping and identity announcement failure. But with keepalive fully off,
++// a 2-node private DHT had no periodic activity and identity announce timed
++// out / never completed (queryPeerServices status=1, messages pending).
++// 30s is infrequent enough not to flap buckets, yet provides the periodic
++// bootstrap ping the 2-node DHT needs. 0 disables explicitly.
++void
++JamiAccount::scheduleDhtKeepalive_()
++{
++    static const int keepaliveSec = [] {
++        const char* e = std::getenv("JAMI_P6_KEEPALIVE_SEC");
++        if (!e)
++            return 30;
++        int v = std::atoi(e);
++        return (v >= 0 && v <= 60) ? v : 30;
++    }();
++    if (keepaliveSec <= 0)
++        return;
++    if (!dhtKeepaliveTimer_)
++        dhtKeepaliveTimer_ = std::make_shared<asio::steady_timer>(*jami::Manager::instance().ioContext());
++    dhtKeepaliveTimer_->expires_after(std::chrono::seconds(keepaliveSec));
++    dhtKeepaliveTimer_->async_wait([w = weak()](const std::error_code& ec) {
++        if (ec)
++            return;
++        auto shared = w.lock();
++        if (!shared)
++            return;
++        if (shared->dht_ && shared->dht_->isRunning()) {
++            // Lightweight liveness ping via bootstrap(). Do NOT use
++            // connectivityChanged() here: it resets every bucket node to
++            // "dubious" (dht.cpp), causing Connected<->Connecting flapping
++            // every interval and preventing the ~10s identity announcement
++            // from ever completing in a 2-node private DHT. bootstrap(addr)
++            // just sends a ping (dhtrunner.cpp) and leaves the routing table
++            // intact, while still generating the DHT activity announce needs.
++            for (const auto& bootstrap : shared->loadBootstrap())
++                shared->dht_->bootstrap(bootstrap);
++        }
++        shared->scheduleDhtKeepalive_(); // re-arm
++    });
++}
++
++// P6 one-side IP change support.
++// The side whose IP changed rebinds nothing (socket bound to "::" follows the
++// new interface address automatically); it just has to send one packet to the
++// peer so the peer learns the new GUA from the packet source (OpenDHT already
++// does cache.getNode(msg->id, from, ...)).
++// The side whose IP stayed fixed hot-updates its bootstrap list from the
++// routing table (exportNodes) so it can re-reach a peer that moved.
++void
++JamiAccount::p6RefreshBootstrap_()
++{
++    auto conf = config();
++    static const bool p6Enabled = [] {
++        const char* e = std::getenv("JAMI_P6_DHT_IPV6");
++#ifdef __ANDROID__
++        return !e || std::string(e) != "0";
++#else
++        return e && std::string(e) == "1";
++#endif
++    }();
++    if (not p6Enabled or not conf.privateDhtOnly or not dht_ or not dht_->isRunning())
++        return;
++    auto now = std::chrono::steady_clock::now();
++    if (now - p6LastBootstrapRefresh_ < std::chrono::seconds(3))
++        return;
++    p6LastBootstrapRefresh_ = now;
++
++    // Fixed-address side (JAMI_P6_BIND_IP6 set, typically PC): learn the peer's
++    // current address from the routing table and hot-update bootstrap. The
++    // mobile side (wildcard bind) must NOT clearBootstrap() -- its bootstrap
++    // entry is how it re-reaches the fixed peer, clearing it broke the link.
++    const char* bindEnv = std::getenv("JAMI_P6_BIND_IP6");
++    const bool fixedSide = bindEnv && *bindEnv;
++    auto nodes = dht_->exportNodes();
++    const auto self = dht_->getPublicKey() ? dht_->getPublicKey()->getId() : dht::InfoHash{};
++    if (fixedSide) {
++        for (const auto& n : nodes) {
++            if (n.addr.getFamily() != AF_INET6 or not n.addr or n.id == self)
++                continue;
++            dht_->clearBootstrap();
++            dht_->bootstrap(n.id, n.addr);
++            JAMI_LOG("[Account {}] P6: refreshed bootstrap from learned peer {}",
++                     getAccountID(), n.addr.toString());
++            return;
++        }
++    }
++
++    // No peer known yet: ping the last configured address so the peer learns
++    // OUR current address (we are the side that moved).
++    for (const auto& bootstrap : loadBootstrap()) {
++        auto resolved = dht::SockAddr::resolve(bootstrap);
++        if (not resolved.empty()) {
++            dht_->bootstrap(resolved.front());
++            JAMI_LOG("[Account {}] P6: probed last known peer {} after network change",
++                     getAccountID(), bootstrap);
++        }
++    }
++}
++
+ void
+ JamiAccount::connectivityChanged()
+ {
+@@ -2984,7 +3191,19 @@
+ 
+     if (auto* cm = convModule())
+         cm->connectivityChanged();
+-    dht_->connectivityChanged();
++    // P6: throttle dht_->connectivityChanged() to at most once per 30s.
++    // Android NetworkCallback (MIUI mobile data) fires this 3-4 times within
++    // the same second; each call resets every OpenDHT bucket node to "dubious"
++    // (dht.cpp buckets.connectivityChanged), repeatedly interrupting the ~10s
++    // identity announcement and leaving ICE channels unbuildable (messages
++    // stuck pending). OpenDHT learns our current address from packet sources
++    // anyway (verified in the one-side IP-change test), so throttling is safe.
++    static std::chrono::steady_clock::time_point lastDhtConnectivity {};
++    auto now = std::chrono::steady_clock::now();
++    if (now - lastDhtConnectivity >= std::chrono::seconds(30)) {
++        lastDhtConnectivity = now;
++        dht_->connectivityChanged();
++    }
+     {
+         std::shared_lock lkCM(connManagerMtx_);
+         if (connectionManager_) {
+@@ -3002,6 +3221,14 @@
+         return;
+     runOnMainThread([w = weak()] {
+         if (auto account = w.lock()) {
++            // NOTE: p6RefreshBootstrap_() is intentionally NOT called here.
++            // Real-machine test 2026-11-26: clearBootstrap()+bootstrap(peer)
++            // on the fixed side broke identity announcement (no
++            // "Identity announcement succeeded", queryPeerServices status=1,
++            // messages stuck pending). OpenDHT already learns the peer's new
++            // address from packet sources (verified: phone port 50000->50001
++            // reconnected with PC config untouched), so this refresh is
++            // unnecessary and harmful.
+             for (const auto& callId : account->getCallList()) {
+                 if (auto call = std::dynamic_pointer_cast<SIPCall>(account->getCall(callId)))
+                     call->beginCallRecovery(true);
+--- a/src/jamidht/jamiaccount_config.cpp
++++ b/src/jamidht/jamiaccount_config.cpp
+@@ -20,8 +20,137 @@
+ #include "configkeys.h"
+ #include "fileutils.h"
+ #include "config/account_config_utils.h"
++#include "logger.h"
++// P2 (F-905): header-only JAMI-P1 v1 verification kernel (all inline).
++#include "pair_token.h"
++
++// P3 (F-906) D4: host-reachability (L3) probe via ICMP echo.
++// Probing a DHT UDP port over TCP yields silent timeouts even when the host is
++// online, so TCP is not a valid L3 signal. ICMP echo is the correct L3 test.
++#ifdef _WIN32
++#include <winsock2.h>
++#include <ws2tcpip.h>
++#include <iphlpapi.h>
++#include <icmpapi.h>
++#else
++#include <arpa/inet.h>
++#include <fcntl.h>
++#include <netdb.h>
++#include <netinet/in.h>
++#include <netinet/ip_icmp.h>
++#include <sys/socket.h>
++#include <unistd.h>
++#endif
++#include <chrono>
++#include <cerrno>
++#include <cstring>
++#include <thread>
+ 
+ namespace jami {
++
++namespace p2 {
++
++/** Split "host:port" (v4) or "[v6]:port" (v6). Port is ignored by the ICMP
++ *  probe (L3 host reachability), but kept for address-format validation. */
++static bool
++splitHostPort(const std::string& addr, std::string& host, std::string& port, bool& isV6)
++{
++    if (addr.size() > 2 and addr[0] == '[') {
++        auto close = addr.find(']');
++        if (close == std::string::npos or close + 1 >= addr.size() or addr[close + 1] != ':')
++            return false;
++        host = addr.substr(1, close - 1);
++        port = addr.substr(close + 2);
++        isV6 = true;
++    } else {
++        auto colon = addr.rfind(':');
++        if (colon == std::string::npos)
++            return false;
++        host = addr.substr(0, colon);
++        port = addr.substr(colon + 1);
++        isV6 = false;
++    }
++    return !host.empty() and !port.empty();
++}
++
++#ifdef _WIN32
++/** Windows: IcmpSendEcho (no raw-socket privilege needed). */
++static bool
++icmpReachProbe(const std::string& addr, int timeoutMs = 500)
++{
++    std::string host, port;
++    bool isV6 = false;
++    if (!splitHostPort(addr, host, port, isV6) or isV6)
++        return false;  // IPv6 ICMP needs Icmp6SendEcho; not in scope for P3 gate
++    HANDLE h = IcmpCreateFile();
++    if (h == INVALID_HANDLE_VALUE)
++        return false;
++    unsigned char replyBuf[sizeof(ICMP_ECHO_REPLY) + 32];
++    IPAddr dest = inet_addr(host.c_str());
++    if (dest == INADDR_NONE) {
++        struct hostent* he = gethostbyname(host.c_str());
++        if (!he or he->h_addr_list[0] == nullptr) { IcmpCloseHandle(h); return false; }
++        std::memcpy(&dest, he->h_addr_list[0], 4);
++    }
++    DWORD n = IcmpSendEcho(h, dest, nullptr, 0, nullptr, replyBuf, sizeof(replyBuf), timeoutMs);
++    IcmpCloseHandle(h);
++    if (n == 0)
++        return false;
++    auto* r = reinterpret_cast<ICMP_ECHO_REPLY*>(replyBuf);
++    return r->Status == IP_SUCCESS;
++}
++#else
++/** POSIX (Linux/Android): SOCK_DGRAM ICMP needs no root. */
++static bool
++icmpReachProbe(const std::string& addr, int timeoutMs = 500)
++{
++    std::string host, port;
++    bool isV6 = false;
++    if (!splitHostPort(addr, host, port, isV6) or isV6)
++        return false;
++    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
++    if (fd < 0)
++        return false;
++    struct sockaddr_in dest {};
++    dest.sin_family = AF_INET;
++    dest.sin_addr.s_addr = inet_addr(host.c_str());
++    if (dest.sin_addr.s_addr == INADDR_NONE) {
++        struct hostent* he = gethostbyname(host.c_str());
++        if (!he or he->h_addr_list[0] == nullptr) { close(fd); return false; }
++        std::memcpy(&dest.sin_addr, he->h_addr_list[0], 4);
++    }
++    struct icmphdr pkt {};
++    pkt.type = ICMP_ECHO;
++    pkt.un.echo.id = static_cast<uint16_t>(getpid() & 0xffff);
++    pkt.un.echo.sequence = 1;
++    pkt.checksum = 0;
++    // kernel computes checksum for SOCK_DGRAM ICMP
++    if (sendto(fd, &pkt, sizeof(pkt), 0, (struct sockaddr*)&dest, sizeof(dest)) < 0) {
++        close(fd);
++        return false;
++    }
++    timeval tv {timeoutMs / 1000, (timeoutMs % 1000) * 1000};
++    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++    char buf[128];
++    struct sockaddr_in from {};
++    socklen_t flen = sizeof(from);
++    ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr*)&from, &flen);
++    close(fd);
++    if (n <= 0)
++        return false;
++    auto* rep = reinterpret_cast<struct icmphdr*>(buf);
++    return rep->type == ICMP_ECHOREPLY;
++}
++#endif
++
++/** Backward-compatible name used by the config hook. */
++static bool
++tcpReachProbe(const std::string& addr, int timeoutMs = 500)
++{
++    return icmpReachProbe(addr, timeoutMs);
++}
++
++} // namespace p2
+ 
+ namespace Conf {
+ constexpr const char* const TLS_KEY = "tls";
+@@ -47,6 +176,7 @@
+     SERIALIZE_CONFIG(libjami::Account::ConfProperties::ACCOUNT_PEER_DISCOVERY, accountPeerDiscovery);
+     SERIALIZE_CONFIG(libjami::Account::ConfProperties::ACCOUNT_PUBLISH, accountPublish);
+     SERIALIZE_CONFIG(Conf::PROXY_ENABLED_KEY, proxyEnabled);
++    SERIALIZE_CONFIG(P2_PRIVATE_DHT_ONLY_KEY, privateDhtOnly);
+     SERIALIZE_CONFIG(Conf::PROXY_SERVER_KEY, proxyServer);
+     SERIALIZE_CONFIG(libjami::Account::ConfProperties::PROXY_LIST_ENABLED, proxyListEnabled);
+     SERIALIZE_CONFIG(libjami::Account::ConfProperties::DHT_PROXY_LIST_URL, proxyListUrl);
+@@ -98,6 +228,7 @@
+     parseValueOptional(node, Conf::DHT_ALLOW_PEERS_FROM_TRUSTED, allowPeersFromTrusted);
+ 
+     parseValueOptional(node, Conf::PROXY_ENABLED_KEY, proxyEnabled);
++    parseValueOptional(node, P2_PRIVATE_DHT_ONLY_KEY, privateDhtOnly);
+     parseValueOptional(node, Conf::PROXY_SERVER_KEY, proxyServer);
+     parseValueOptional(node, libjami::Account::ConfProperties::DHT_PROXY_LIST_URL, proxyListUrl);
+     parseValueOptional(node, libjami::Account::ConfProperties::PROXY_LIST_ENABLED, proxyListEnabled);
+@@ -130,6 +261,71 @@
+     // are present (migration from configs that stored both).
+     parseValueOptional(node, Conf::DHT_PUBLIC_IN_CALLS, allowPublicIncoming);
+     parseValueOptional(node, libjami::Account::ConfProperties::DHT::PUBLIC_IN_CALLS, allowPublicIncoming);
++
++    // ---- P2 (F-905): one-shot pairing-token config hook ---------------
++    // A JAMI-P1 token pre-seeded in config.yml under `pairTokenToImport`
++    // is consumed HERE, at config-load time, i.e. BEFORE the account's
++    // first doRegister(). Deliberately NOT via libjami::importPairToken()
++    // (that path does setAccountDetails -> doUnregister/doRegister and
++    // would re-enter registration while loading, or -- if deferred until
++    // after registration -- would first bootstrap on the PUBLIC DHT).
++    // The decision logic is the SAME inline function self-tested in L1.
++    // On any failure NOTHING is changed (public-DHT defaults remain).
++    // pairTokenConsumed triggers a saveConfig() in Manager::registerAccounts()
++    // which persists hostname/privateDhtOnly and drops the token key.
++    {
++        std::string pairToken;
++        if (parseValueOptional(node, P2_PAIR_TOKEN_IMPORT_KEY, pairToken)
++            and not pairToken.empty()) {
++            const auto v = jami::p2::consumePairTokenForConfig(pairToken);
++            if (v.ok) {
++                // P3 (F-906) D4: optional reachability gate. OFF by default:
++                // cold-start pairing often imports the token before the peer
++                // daemon is up, so an eager probe would wrongly reject a valid
++                // token. Enable with env JAMI_P3_REACH_GATE=1 when both peers
++                // are already running (S4 pre-flight check).
++                bool reachGate = false;
++                if (auto* e = std::getenv("JAMI_P3_REACH_GATE"))
++                    reachGate = std::string(e) == "1";
++                bool accepted = true;
++                if (reachGate) {
++                    auto parsed = jami::p2::parsePairToken(pairToken);
++                    auto rf = jami::p2::filterReachableCandidates(
++                        parsed.v4, parsed.v6,
++                        jami::p2::ReachProbe([](const std::string& a) {
++                            return jami::p2::tcpReachProbe(a, 300);
++                        }));
++                    accepted = rf.reachable > 0;
++                    if (!accepted) {
++                        JAMI_WARNING("[Account {}] P3 config hook: NO reachable "
++                                     "candidate out of {} probed (symmetric NAT / "
++                                     "offline peer?) -- rejecting pairTokenToImport; "
++                                     "config left unchanged",
++                                     id, rf.tested);
++                    } else {
++                        std::string filtered;
++                        for (const auto& a : rf.v4) { if (!filtered.empty()) filtered += ';'; filtered += a; }
++                        for (const auto& a : rf.v6) { if (!filtered.empty()) filtered += ';'; filtered += a; }
++                        hostname = filtered;
++                    }
++                }
++                if (accepted) {
++                    if (!reachGate)
++                        hostname = v.hostname;
++                    privateDhtOnly = v.privateDhtOnly;
++                    proxyEnabled = v.proxyEnabled;
++                    pairTokenConsumed = v.consumed;
++                    JAMI_LOG("[Account {}] P2 config hook: consumed pairTokenToImport "
++                             "(private DHT enabled, hostname={}, fp={}, D4 gate={})",
++                             id, hostname, v.fingerprint, reachGate ? "on" : "off");
++                }
++            } else {
++                JAMI_WARNING("[Account {}] P2 config hook: rejected "
++                             "pairTokenToImport ({}); config left unchanged",
++                             id, v.error);
++            }
++        }
++    }
+ }
+ 
+ std::map<std::string, std::string>
+@@ -157,6 +353,7 @@
+     a.emplace(libjami::Account::ConfProperties::ALLOW_CERT_FROM_TRUSTED, allowPeersFromTrusted ? TRUE_STR : FALSE_STR);
+     a.emplace(libjami::Account::ConfProperties::DHT::ALLOW_FROM_TRUSTED, allowPeersFromTrusted ? TRUE_STR : FALSE_STR);
+     a.emplace(libjami::Account::ConfProperties::PROXY_ENABLED, proxyEnabled ? TRUE_STR : FALSE_STR);
++    a.emplace(P2_PRIVATE_DHT_ONLY_KEY, privateDhtOnly ? TRUE_STR : FALSE_STR);
+     a.emplace(libjami::Account::ConfProperties::PROXY_LIST_ENABLED, proxyListEnabled ? TRUE_STR : FALSE_STR);
+     a.emplace(libjami::Account::ConfProperties::PROXY_SERVER, proxyServer);
+     a.emplace(libjami::Account::ConfProperties::DHT_PROXY_LIST_URL, proxyListUrl);
+@@ -174,13 +371,17 @@
+ JamiAccountConfig::fromMap(const std::map<std::string, std::string>& details)
+ {
+     SipAccountBaseConfig::fromMap(details);
++    parseBool(details, P2_PRIVATE_DHT_ONLY_KEY, privateDhtOnly);
+     // TLS
+     parsePath(details, Conf::CONFIG_TLS_CA_LIST_FILE, tlsCaListFile, path);
+     parsePath(details, Conf::CONFIG_TLS_CERTIFICATE_FILE, tlsCertificateFile, path);
+     parsePath(details, Conf::CONFIG_TLS_PRIVATE_KEY_FILE, tlsPrivateKeyFile, path);
+     parseString(details, Conf::CONFIG_TLS_PASSWORD, tlsPassword);
+ 
+-    if (hostname.empty())
++    // P2 (F-905): in private-DHT mode an empty hostname must NOT be
++    // filled with the public default bootstrap; importPairToken() supplies
++    // the peer address instead.
++    if (hostname.empty() && not privateDhtOnly)
+         hostname = DHT_DEFAULT_BOOTSTRAP;
+     parseString(details, libjami::Account::ConfProperties::BOOTSTRAP_LIST_URL, bootstrapListUrl);
+     parseInt(details, Conf::CONFIG_DHT_PORT, dhtPort);
+--- a/src/jamidht/jamiaccount_config.h
++++ b/src/jamidht/jamiaccount_config.h
+@@ -20,6 +20,18 @@
+ namespace jami {
+ constexpr static std::string_view ACCOUNT_TYPE_JAMI = "RING";
+ constexpr static const char* const DHT_DEFAULT_BOOTSTRAP = "bootstrap.jami.net";
++/** P2 (F-905): when true, loadBootstrap() ignores the public default
++ *  bootstrap and initDhtConfig() disables the public DHT proxy, so the
++ *  account joins a private 2-node DHT only. Default off => stock Jami
++ *  behaviour is completely unchanged. */
++constexpr static const char* const P2_PRIVATE_DHT_ONLY_KEY = "privateDhtOnly";
++/** P2 (F-905): one-shot pairing-token config hook key.
++ *  A JAMI-P1 token pre-seeded in the account config.yml under this key is
++ *  consumed by JamiAccountConfig::unserialize() at load time (before the
++ *  first doRegister), so the first DHT bootstrap already uses the private
++ *  peer. Intentionally NOT serialized back => removed on next config save.
++ *  Default: absent => stock Jami behaviour completely unchanged. */
++constexpr static const char* const P2_PAIR_TOKEN_IMPORT_KEY = "pairTokenToImport";
+ constexpr static const char* DEFAULT_TURN_SERVER = "turn.jami.net";
+ constexpr static const char* DEFAULT_TURN_USERNAME = "ring";
+ constexpr static const char* DEFAULT_TURN_PWD = "ring";
+@@ -52,6 +64,11 @@
+     std::string bootstrapListUrl {"https://config.jami.net/bootstrapList"};
+ 
+     bool proxyEnabled {false};
++    bool privateDhtOnly {false};
++    /** P2 (F-905): transient, NOT serialized. Set by unserialize() when a
++     *  pre-seeded pairTokenToImport was successfully verified; consumed by
++     *  Manager::registerAccounts() to persist the result + clear the key. */
++    bool pairTokenConsumed {false};
+     bool proxyListEnabled {true};
+     std::string proxyServer {"dhtproxy.jami.net:[80-95]"};
+     std::string proxyListUrl {"https://config.jami.net/proxyList"};
+--- a/src/client/configurationmanager.cpp
++++ b/src/client/configurationmanager.cpp
+@@ -28,9 +28,11 @@
+ #include "jamidht/service_manager.h"
+ #include "sip/sipaccount_config.h"
+ #include "jamidht/jamiaccount_config.h"
++#include "jamidht/pair_token.h"
+ #include "audio/audiolayer.h"
+ #include "system_codec_container.h"
+ #include "account_const.h"
++#include <mutex>
+ #include "security_const.h"
+ #include "client/jami_signal.h"
+ #include "audio/ringbufferpool.h"
+@@ -221,6 +223,136 @@
+ {
+     jami::Manager::instance().setAccountDetails(accountId, details);
+ }
++
++// ---------------------------------------------------------------------------
++// P2 (F-905): pairing token APIs. The protocol implementation lives in
++// jamidht/pair_token.h (header-only, self-tested). These are thin wrappers.
++// ---------------------------------------------------------------------------
++namespace {
++
++std::map<std::string, std::string>
++pairInfoToMap(const jami::p2::PairTokenInfo& p)
++{
++    std::map<std::string, std::string> m;
++    m["status"] = p.ok ? "ok" : "error";
++    if (not p.ok) {
++        m["error"] = p.error;
++        return m;
++    }
++    m["aid"] = p.aid;
++    m["did"] = p.did;
++    m["hostname"] = p.hostname;
++    m["fingerprint"] = p.fingerprint;
++    m["nat"] = p.nat;
++    m["v"] = std::to_string(p.v);
++    m["ts"] = std::to_string(p.ts);
++    m["ttl"] = std::to_string(p.ttl);
++    std::string v4, v6;
++    for (const auto& s : p.v4) { if (not v4.empty()) v4 += ";"; v4 += s; }
++    for (const auto& s : p.v6) { if (not v6.empty()) v6 += ";"; v6 += s; }
++    m["v4"] = v4;
++    m["v6"] = v6;
++    m["peerPubkey"] = jami::p2::detail::hexOf(p.pk.data(), p.pk.size());
++    return m;
++}
++
++void
++logPairSelfTestOnce()
++{
++    static std::once_flag once;
++    std::call_once(once, [] {
++        auto r = jami::p2::pairTokenSelfTest();
++        JAMI_LOG("P2_PAIR_SELFTEST={} PASS={} FAIL={}",
++                 r.fail == 0 ? "PASS" : "FAIL", r.pass, r.fail);
++        if (r.fail)
++            JAMI_WARNING("P2 pairing self-test details:\n{}", r.details);
++    });
++}
++
++} // namespace
++
++std::map<std::string, std::string>
++parsePairToken(const std::string& token)
++{
++    logPairSelfTestOnce();
++    return pairInfoToMap(jami::p2::parsePairToken(token));
++}
++
++std::map<std::string, std::string>
++importPairToken(const std::string& accountId, const std::string& token)
++{
++    logPairSelfTestOnce();
++    auto p = jami::p2::parsePairToken(token);
++    auto ret = pairInfoToMap(p);
++    if (not p.ok) {
++        JAMI_WARNING("[account:{}] P2 import rejected: {}", accountId, p.error);
++        return ret;  // rejected tokens write NOTHING
++    }
++
++    auto account = jami::Manager::instance().getAccount(accountId);
++    if (not account) {
++        ret["status"] = "error";
++        ret["error"] = "account_not_found";
++        return ret;
++    }
++
++    // Reuse the official config hot-reload path: doUnregister -> apply ->
++    // doRegister, so the new bootstrap list is rebuilt without restarting the
++    // application. The private-DHT switch also disables the public DHT proxy.
++    auto details = account->getAccountDetails();
++    details["Account.hostname"] = p.hostname;
++    details["Account.proxyEnabled"] = "false";
++    details[jami::P2_PRIVATE_DHT_ONLY_KEY] = "true";
++    jami::Manager::instance().setAccountDetails(accountId, details);
++    ret["applied"] = "true";
++    JAMI_LOG("[account:{}] P2 importPairToken: private DHT enabled, hostname={}, fp={}",
++             accountId, p.hostname, p.fingerprint);
++    return ret;
++}
++
++std::map<std::string, std::string>
++p2SelfTest()
++{
++    auto r = jami::p2::pairTokenSelfTest();
++    return {{"status", r.fail == 0 ? "PASS" : "FAIL"},
++            {"pass", std::to_string(r.pass)},
++            {"fail", std::to_string(r.fail)},
++            {"details", r.details}};
++}
++
++std::map<std::string, std::string>
++getPrivateLinkStatus(const std::string& accountId)
++{
++    std::map<std::string, std::string> ret;
++    ret["dht"] = "unknown";
++    ret["bootstraps"] = "";
++    ret["ice"] = "unknown";
++    ret["note_delivered"] = "unknown";
++    ret["body_merged"] = "unknown";
++
++    auto vol = getVolatileAccountDetails(accountId);
++    auto it = vol.find("Account.registrationStatus");
++    if (it != vol.end())
++        ret["dht"] = it->second;
++    auto da = vol.find("Account.deviceAnnounced");
++    if (da != vol.end())
++        ret["device_announced"] = da->second;
++
++    auto details = getAccountDetails(accountId);
++    auto b = details.find("Account.hostname");
++    if (b != details.end())
++        ret["bootstraps"] = b->second;
++    auto p = details.find(jami::P2_PRIVATE_DHT_ONLY_KEY);
++    if (p != details.end())
++        ret["private_dht"] = p->second;
++
++    // ice / note_delivered / body_merged remain "unknown": the per-conversation
++    // connectivity API (getConversationConnectivity) is the authoritative
++    // source for those layers and is exposed separately to clients. Keeping
++    // this API to account-level facts avoids guessing and ABI churn.
++    return ret;
++}
++
+ 
+ void
+ setAccountActive(const std::string& accountId, bool enable, bool shutdownConnections)
+--- a/src/jami/configurationmanager_interface.h
++++ b/src/jami/configurationmanager_interface.h
+@@ -45,6 +45,23 @@
+ LIBJAMI_PUBLIC std::map<std::string, std::string> getAccountDetails(const std::string& accountId);
+ LIBJAMI_PUBLIC std::map<std::string, std::string> getVolatileAccountDetails(const std::string& accountId);
+ LIBJAMI_PUBLIC void setAccountDetails(const std::string& accountId, const std::map<std::string, std::string>& details);
++
++/** P2 (F-905): parse+verify a JAMI-P1 pairing token, NO side effects.
++ *  Returns status=ok|error, aid, hostname, fingerprint, ... */
++LIBJAMI_PUBLIC std::map<std::string, std::string> parsePairToken(const std::string& token);
++/** P2 (F-905): parse+verify a token, then write Account.hostname,
++ *  privateDhtOnly=true and Account.proxyEnabled=false, and re-register the
++ *  account so it bootstraps into the private DHT. One token = zero manual
++ *  configuration. Rejected tokens write NOTHING. */
++LIBJAMI_PUBLIC std::map<std::string, std::string> importPairToken(const std::string& accountId,
++                                                                  const std::string& token);
++/** P2 (F-905): run the built-in deterministic protocol self-test. */
++LIBJAMI_PUBLIC std::map<std::string, std::string> p2SelfTest();
++/** P3 (F-906) D5: layered link status for the private 2-node DHT.
++ *  Keys: dht (Disconnected/Connecting/Connected from RegistrationState),
++ *  bootstraps (config hostname), ice / note_delivered / body_merged
++ *  (best-effort from conversation connectivity + message status). */
++LIBJAMI_PUBLIC std::map<std::string, std::string> getPrivateLinkStatus(const std::string& accountId);
+ LIBJAMI_PUBLIC void setAccountActive(const std::string& accountId, bool active, bool shutdownConnections = false);
+ LIBJAMI_PUBLIC void loadAccountAndConversation(const std::string& accountId, bool loadAll, const std::string& convId);
+ LIBJAMI_PUBLIC std::map<std::string, std::string> getAccountTemplate(const std::string& accountType);
+--- a/bin/dbus/cx.ring.Ring.ConfigurationManager.xml
++++ b/bin/dbus/cx.ring.Ring.ConfigurationManager.xml
+@@ -106,6 +106,34 @@
+             </arg>
+         </method>
+ 
++        <method name="parsePairToken" tp:name-for-bindings="parsePairToken">
++            <tp:docstring>P2: parse+verify a JAMI-P1 pairing token, no side effects.</tp:docstring>
++            <arg type="s" name="token" direction="in"/>
++            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="MapStringString"/>
++            <arg type="a{ss}" name="result" direction="out" tp:type="String_String_Map"/>
++        </method>
++
++        <method name="importPairToken" tp:name-for-bindings="importPairToken">
++            <tp:docstring>P2: parse+verify a token then apply private-DHT bootstrap config.</tp:docstring>
++            <arg type="s" name="accountId" direction="in"/>
++            <arg type="s" name="token" direction="in"/>
++            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="MapStringString"/>
++            <arg type="a{ss}" name="result" direction="out" tp:type="String_String_Map"/>
++        </method>
++
++        <method name="p2SelfTest" tp:name-for-bindings="p2SelfTest">
++            <tp:docstring>P2: run the built-in deterministic pairing protocol self-test.</tp:docstring>
++            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="MapStringString"/>
++            <arg type="a{ss}" name="result" direction="out" tp:type="String_String_Map"/>
++        </method>
++
++        <method name="getPrivateLinkStatus" tp:name-for-bindings="getPrivateLinkStatus">
++            <tp:docstring>P3: layered link status (dht/bootstraps/private_dht) for the private 2-node DHT.</tp:docstring>
++            <arg type="s" name="accountId" direction="in"/>
++            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="MapStringString"/>
++            <arg type="a{ss}" name="result" direction="out" tp:type="String_String_Map"/>
++        </method>
++
+         <method name="setAccountActive" tp:name-for-bindings="setAccountActive">
+             <tp:docstring>
+               Set if this account is currently enabled (can be used).
+--- a/bin/jni/configurationmanager.i
++++ b/bin/jni/configurationmanager.i
+@@ -84,6 +84,10 @@
+ std::map<std::string, std::string> getAccountDetails(const std::string& accountId);
+ std::map<std::string, std::string> getVolatileAccountDetails(const std::string& accountId);
+ void setAccountDetails(const std::string& accountId, const std::map<std::string, std::string>& details);
++std::map<std::string, std::string> parsePairToken(const std::string& token);
++std::map<std::string, std::string> importPairToken(const std::string& accountId, const std::string& token);
++std::map<std::string, std::string> p2SelfTest();
++std::map<std::string, std::string> getPrivateLinkStatus(const std::string& accountId);
+ void setAccountActive(const std::string& accountId, bool active, bool shutdownConnections = false);
+ std::map<std::string, std::string> getAccountTemplate(const std::string& accountType);
+ void monitor(bool continuous);
+--- a/bin/nodejs/configurationmanager.i
++++ b/bin/nodejs/configurationmanager.i
+@@ -81,6 +81,10 @@
+ std::map<std::string, std::string> getAccountDetails(const std::string& accountId);
+ std::map<std::string, std::string> getVolatileAccountDetails(const std::string& accountId);
+ void setAccountDetails(const std::string& accountId, const std::map<std::string, std::string>& details);
++std::map<std::string, std::string> parsePairToken(const std::string& token);
++std::map<std::string, std::string> importPairToken(const std::string& accountId, const std::string& token);
++std::map<std::string, std::string> p2SelfTest();
++std::map<std::string, std::string> getPrivateLinkStatus(const std::string& accountId);
+ void setAccountActive(const std::string& accountId, bool active);
+ std::map<std::string, std::string> getAccountTemplate(const std::string& accountType);
+ void monitor(bool continuous);
+--- a/bin/nodejs/src/index.ts
++++ b/bin/nodejs/src/index.ts
+@@ -184,6 +184,9 @@
+   getAccountDetails(accountId: string): StringMap
+   getVolatileAccountDetails(accountId: string): StringMap
+   setAccountDetails(accountId: string, details: StringMap): void
++  parsePairToken(token: string): StringMap
++  importPairToken(accountId: string, token: string): StringMap
++  p2SelfTest(): StringMap
+   addAccount(details: StringMap): string
+   removeAccount(accountId: string): void
+   updateProfile(
