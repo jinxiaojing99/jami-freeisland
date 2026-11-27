@@ -1,0 +1,72 @@
+--- a/src/fileutils.cpp
++++ b/src/fileutils.cpp
+@@ -38,6 +38,7 @@
+ 
+ #ifdef _WIN32
+ #include <windows.h>
++#include <share.h>
+ #include "string_utils.h"
+ #endif
+ 
+@@ -95,6 +96,28 @@
+ #define XDG_DATA_HOME   (PROTECTED_GETENV("XDG_DATA_HOME"))
+ #define XDG_CONFIG_HOME (PROTECTED_GETENV("XDG_CONFIG_HOME"))
+ #define XDG_CACHE_HOME  (PROTECTED_GETENV("XDG_CACHE_HOME"))
++
++#ifdef _WIN32
++/* MSVC defines JAMI_*_HOME above; MinGW needs the same wide-string
++   environment lookup without the MSVC-only winGetEnv helper. */
++static std::wstring
++winGetEnvMinGW(const char* name)
++{
++    const char* value = getenv(name);
++    if (!value || !*value)
++        return std::wstring();
++    int size = MultiByteToWideChar(CP_UTF8, 0, value, -1, nullptr, 0);
++    if (size <= 1)
++        return std::wstring();
++    std::wstring result(static_cast<size_t>(size - 1), L'\0');
++    MultiByteToWideChar(CP_UTF8, 0, value, -1, &result[0], size);
++    return result;
++}
++
++#define JAMI_DATA_HOME   winGetEnvMinGW("JAMI_DATA_HOME")
++#define JAMI_CONFIG_HOME winGetEnvMinGW("JAMI_CONFIG_HOME")
++#define JAMI_CACHE_HOME  winGetEnvMinGW("JAMI_CACHE_HOME")
++#endif
+ #else
+ const wchar_t*
+ winGetEnv(const wchar_t* name)
+@@ -292,7 +315,11 @@
+ 
+     // Open with explicit share mode to allow reading even if file is opened elsewhere
+ #ifdef _WIN32
++    #ifdef _MSC_VER
+     std::ifstream file(fullPath, std::ios::in | std::ios::binary, _SH_DENYNO);
++    #else
++    std::ifstream file(fullPath, std::ios::in | std::ios::binary);
++    #endif
+ #else
+     std::ifstream file(fullPath);
+ #endif
+@@ -512,7 +539,11 @@
+ #elif defined _WIN32
+     TCHAR path[MAX_PATH];
+     if (SUCCEEDED(SHGetFolderPath(nullptr, CSIDL_PROFILE, nullptr, 0, path))) {
++#ifdef UNICODE
+         return jami::to_string(path);
++#else
++        return std::string(path);
++#endif
+     }
+     return {};
+ #else
+@@ -750,7 +781,7 @@
+ #ifdef _WIN32
+     // use Win32 api since std::remove will not unlink directory in use
+     if (std::filesystem::is_directory(path))
+-        return !RemoveDirectory(path.c_str());
++        return !RemoveDirectoryW(path.c_str());
+ #endif
+ 
+     return std::remove(path.string().c_str());

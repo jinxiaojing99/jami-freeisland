@@ -1,0 +1,26 @@
+--- a/src/sip/sipaccount.cpp
++++ b/src/sip/sipaccount.cpp
+@@ -70,6 +70,11 @@
+ #include <lmcons.h>
+ #else
+ #include <pwd.h>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ #endif
+ 
+ namespace jami {
+@@ -1131,7 +1136,11 @@
+     TCHAR username[UNLEN + 1];
+     std::string uname;
+     if (GetUserName((TCHAR*) username, &size)) {
++#ifdef UNICODE
+         uname = jami::to_string(username);
++#else
++        uname = std::string(username);
++#endif
+     }
+     return uname;
+ #endif

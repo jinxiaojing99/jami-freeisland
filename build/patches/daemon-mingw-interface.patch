@@ -1,0 +1,238 @@
+--- a/src/rational.h
++++ b/src/rational.h
+@@ -26,6 +26,11 @@
+ 
+ extern "C" {
+ #include <libavutil/rational.h> // specify conversions for AVRational
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ }
+ 
+ namespace jami {
+--- a/src/windirent.h
++++ b/src/windirent.h
+@@ -28,6 +28,11 @@
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <errno.h>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ /* Indicates that d_type field is available in dirent structure */
+ #define _DIRENT_HAVE_D_TYPE
+--- a/src/plugin/callservicesmanager.h
++++ b/src/plugin/callservicesmanager.h
+@@ -24,6 +24,11 @@
+ #include <list>
+ #include <mutex>
+ #include <map>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ 
+--- a/src/plugin/chatservicesmanager.h
++++ b/src/plugin/chatservicesmanager.h
+@@ -24,6 +24,11 @@
+ 
+ #include <mutex>
+ #include <set>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ 
+--- a/src/plugin/jamipluginmanager.h
++++ b/src/plugin/jamipluginmanager.h
+@@ -27,6 +27,11 @@
+ #include <vector>
+ #include <map>
+ 
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
++
+ namespace jami {
+ 
+ using PreferencesMap = std::map<std::string, std::map<std::string, std::string>>;
+--- a/src/plugin/preferenceservicesmanager.h
++++ b/src/plugin/preferenceservicesmanager.h
+@@ -24,6 +24,11 @@
+ #include <map>
+ #include <memory>
+ #include <vector>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ 
+--- a/src/plugin/webviewservicesmanager.h
++++ b/src/plugin/webviewservicesmanager.h
+@@ -24,6 +24,11 @@
+ #include <memory>
+ #include <map>
+ #include <string>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ 
+--- a/src/sip/sipaccount.cpp
++++ b/src/sip/sipaccount.cpp
+@@ -70,6 +70,11 @@
+ #include <lmcons.h>
+ #else
+ #include <pwd.h>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ #endif
+ 
+ namespace jami {
+--- a/src/sip/sipaccount_config.cpp
++++ b/src/sip/sipaccount_config.cpp
+@@ -22,6 +22,11 @@
+ #include <pjlib-util/md5.h>
+ 
+ #include <cstddef>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ }
+ 
+ namespace jami {
+--- a/src/sip/sipaccount_config.h
++++ b/src/sip/sipaccount_config.h
+@@ -17,6 +17,11 @@
+ #pragma once
+ #include "connectivity/sip_utils.h"
+ #include "sipaccountbase_config.h"
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ constexpr static std::string_view ACCOUNT_TYPE_SIP = "SIP";
+--- a/src/sip/sipaccountbase.h
++++ b/src/sip/sipaccountbase.h
+@@ -45,6 +45,11 @@
+ typedef uint16_t in_port_t;
+ #else
+ #include <netinet/in.h> // For in_port_t support
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ #endif
+ 
+ struct pjsip_dialog;
+--- a/src/sip/sipaccountbase_config.cpp
++++ b/src/sip/sipaccountbase_config.cpp
+@@ -17,6 +17,11 @@
+ #include "sipaccountbase_config.h"
+ #include "account_schema.h"
+ #include "config/account_config_utils.h"
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ 
+--- a/src/sip/sipaccountbase_config.h
++++ b/src/sip/sipaccountbase_config.h
+@@ -16,6 +16,11 @@
+  */
+ #pragma once
+ #include "account_config.h"
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ constexpr static const char* const OVERRTP_STR = "overrtp";
+--- a/src/media/localrecorder.h
++++ b/src/media/localrecorder.h
+@@ -20,6 +20,11 @@
+ #include "recordable.h"
+ #ifdef ENABLE_VIDEO
+ #include "video/video_input.h"
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ #endif
+ 
+ namespace jami {
+--- a/src/media/recordable.h
++++ b/src/media/recordable.h
+@@ -21,6 +21,11 @@
+ #include <string>
+ #include <memory>
+ #include <mutex>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ 
+--- a/src/media/video/androidvideo/video_device_monitor_impl.cpp
++++ b/src/media/video/androidvideo/video_device_monitor_impl.cpp
+@@ -28,6 +28,11 @@
+ #include <string>
+ #include <thread>
+ #include <vector>
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ namespace video {
+--- a/src/media/audio/sound/audiofile.h
++++ b/src/media/audio/sound/audiofile.h
+@@ -22,6 +22,11 @@
+ 
+ #include <stdexcept>
+ #include "audio/audioloop.h"
++
++// MinGW-w64: Windows SDK defines `interface` as `struct`.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace jami {
+ 

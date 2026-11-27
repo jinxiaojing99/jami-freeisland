@@ -1,0 +1,34 @@
+# 忽略规则
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# 构建产物
+build/**/CMakeFiles/
+*.obj
+*.o
+*.lib
+*.dll
+*.exe
+*.pdb
+*.apk
+*.so
+*.a
+x64/
+Debug/
+Release/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 敏感信息
+*.token
+*.pem
+secrets.*
+.env

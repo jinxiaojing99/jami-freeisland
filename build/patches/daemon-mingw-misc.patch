@@ -1,0 +1,14 @@
+--- a/src/media/video/video_input.cpp
++++ b/src/media/video/video_input.cpp
+@@ -37,8 +37,10 @@
+ #ifdef _MSC_VER
+ #include <io.h> // for access
+ #else
++#include <unistd.h>
++#ifdef __linux__
+ #include <sys/syscall.h>
+-#include <unistd.h>
++#endif
+ #endif
+ extern "C" {
+ #include <libavutil/display.h>

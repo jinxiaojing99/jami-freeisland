@@ -1,0 +1,11 @@
+--- a/contrib/src/libgit2/rules.mak
++++ b/contrib/src/libgit2/rules.mak
+@@ -31,7 +31,7 @@
+ 		-DUSE_HTTP_PARSER=llhttp \
+ 		-DBUILD_CLAR=OFF \
+ 		-DUSE_SSH=OFF \
+-		-DREGEX_BACKEND=regcomp \
++		-DREGEX_BACKEND=builtin \
+ 		-DCMAKE_C_FLAGS="-fPIC"
+ 
+ # TODO windows pcre?

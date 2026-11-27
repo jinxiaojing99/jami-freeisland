@@ -1,0 +1,48 @@
+--- a/src/ip_utils.cpp
++++ b/src/ip_utils.cpp
+@@ -20,6 +20,12 @@
+ 
+ #include <fmt/format.h>
+ 
++// MinGW: objbase.h (pulled in by string_utils.h) redefines
++// 'interface' as 'struct' after ip_utils.h already undefined it.
++#ifdef interface
++#undef interface
++#endif
++
+ extern "C" {
+ #include <sys/types.h>
+ #include <unistd.h>
+@@ -334,6 +340,7 @@
+     }
+ 
+     switch (result->ai_family) {
++    case AF_INET:
+         sockaddr_ipv4 = (struct sockaddr_in*) result->ai_addr;
+         addr = sockaddr_ipv4->sin_addr;
+         break;
+--- a/src/fileutils.cpp
++++ b/src/fileutils.cpp
+@@ -326,7 +326,7 @@
+ #ifdef _WIN32
+     // use Win32 api since std::remove will not unlink directory in use
+     if (isDirectory(path))
+-        return !RemoveDirectory(dhtnet::to_wstring(path.string()).c_str());
++        return !RemoveDirectoryW(dhtnet::to_wstring(path.string()).c_str());
+ #endif
+ 
+     std::error_code ec;
+--- a/src/upnp/protocol/pupnp/pupnp.cpp
++++ b/src/upnp/protocol/pupnp/pupnp.cpp
+@@ -18,6 +18,11 @@
+ #include "string_utils.h"
+ 
+ #include <opendht/http.h>
++
++// MinGW: Windows SDK headers redefine 'interface' as 'struct'.
++#ifdef interface
++#undef interface
++#endif
+ 
+ namespace dhtnet {
+ namespace upnp {
